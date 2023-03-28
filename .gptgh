@@ -1,0 +1,79 @@
+#!/bin/bash
+
+# Define supported clipboard tools
+declare -a clipboards=("xsel" "pbcopy" "clipit" "xclip" "wl-copy")
+
+# Check clipboard tools in order of preference
+for clipboard in "${clipboards[@]}"
+do
+    if command -v "$clipboard" > /dev/null; then
+        clip="$clipboard"
+        break
+    fi
+done
+
+# Check if clipboard tool was found
+if [ -z "$clip" ]; then
+    echo "No clipboard tool found."
+    exit 1
+fi
+
+# Get clipboard content
+content="$("$clip" -o)"
+
+# Parse first line
+read -ra fields <<< "$content"
+
+if [ "${fields[0]}" != "0.1" ]; then
+    echo "Unsupported format version."
+    exit 1
+fi
+
+if [ "${fields[1]}" != "bash" ]; then
+    echo "Unsupported language."
+    exit 1
+fi
+
+if [ "${fields[2]}" != "f" ] && [ "${fields[2]}" != "d" ]; then
+    echo "Unsupported type."
+    exit 1
+fi
+
+if [ -z "${fields[3]}" ]; then
+    echo "Local repository path not specified."
+    exit 1
+fi
+
+if [ -z "${fields[4]}" ]; then
+    echo "File path not specified."
+    exit 1
+fi
+
+if [ "${fields[2]}" == "f" ]; then
+    # Create or modify file
+    file_path="${fields[3]}/${fields[4]}"
+    if [ -f "$file_path" ]; then
+        echo "$content" | tail -n +2 > "$file_path"
+    else
+        echo "$content" | tail -n +2 > "$file_path"
+        git add "$file_path"
+    fi
+else
+    # Create patch
+    dir_path="${fields[3]}/${fields[4]}"
+    git diff "$dir_path" > "${dir_path}.patch"
+    git add "${dir_path}.patch"
+fi
+
+# Perform operation based on the "operation" field
+if [ "${fields[5]}" == "c" ]; then
+    # Commit local changes
+    git commit -m "${fields[4]} modified"
+elif [ "${fields[5]}" == "p" ]; then
+    # Commit and push changes
+    git commit -m "${fields[4]} modified"
+    git push origin "${fields[6]}"
+else
+    echo "Unsupported operation."
+    exit 1
+fi
