@@ -1,39 +1,27 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Function to detect clipboard tool based on XDG environment variables
-function detect_clipboard_tool() {
-    local tools=(
-        "xclip -selection clipboard -o -t TARGETS - | xclip -selection clipboard -o"    # Xclip
-        "xsel --output --clipboard"                                                     # Xsel
-        "pbpaste"                                                                        # macOS pbpaste
-        "powershell.exe -Command Get-Clipboard"                                          # Windows PowerShell
-        "cmd.exe /c clip"                                                                # Windows CMD
-    )
+# Define functions
 
-    # Determine order of tools based on likelihood of presence
-    if [[ "$XDG_SESSION_TYPE" == "wayland" ]]; then
-        tools=( "${tools[@]:1:3}" "${tools[0]}" "${tools[4]}" )
-    elif [[ "$XDG_SESSION_TYPE" == "x11" ]]; then
-        tools=( "${tools[@]:0:2}" "${tools[3]}" "${tools[2]}" "${tools[4]}" )
-    else
-        tools=( "${tools[@]:3}" "${tools[@]:0:3}" )
-    fi
-
-    # Iterate over tools and return first one that works
-    for tool in "${tools[@]}"; do
-        if command -v "${tool%% *}" > /dev/null; then
-            echo "$tool"
-            return 0
-        fi
-    done
-
-    # No tools found, exit with error
-    echo "No clipboard tool detected." >&2
-    exit 1
+function create_file() {
+  local file="$1"
+  touch "$file"
 }
 
-# Call the function to detect clipboard tool
-clipboard_tool=$(detect_clipboard_tool)
+function modify_file() {
+  local file="$1"
+  local patch="$2"
+  local patch_file="$(mktemp)"
+  echo "$patch" > "$patch_file"
+  git apply --check "$patch_file"
+  if [ $? -ne 0 ]; then
+    echo "Patch file contains errors. Please fix the errors and try again."
+    return 1
+  fi
+  git apply "$patch_file" && rm "$patch_file"
+}
 
-# Test the clipboard tool by printing the clipboard content
-$clipboard_tool
+# Test functions
+
+function test_create_file() {
+  local test_file="$(mktemp)"
+  create_file "$test_file"

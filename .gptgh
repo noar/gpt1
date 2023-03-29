@@ -1,79 +1,75 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Define supported clipboard tools
-declare -a clipboards=("xsel" "pbcopy" "clipit" "xclip" "wl-copy")
+# Define functions
 
-# Check clipboard tools in order of preference
-for clipboard in "${clipboards[@]}"
-do
-    if command -v "$clipboard" > /dev/null; then
-        clip="$clipboard"
-        break
+function get_clipboard_tool() {
+  if [ "$(uname)" == "Darwin" ]; then
+    if command -v pbcopy >/dev/null; then
+      echo "pbcopy"
+      return
     fi
-done
-
-# Check if clipboard tool was found
-if [ -z "$clip" ]; then
-    echo "No clipboard tool found."
-    exit 1
-fi
-
-# Get clipboard content
-content="$("$clip" -o)"
-
-# Parse first line
-read -ra fields <<< "$content"
-
-if [ "${fields[0]}" != "0.1" ]; then
-    echo "Unsupported format version."
-    exit 1
-fi
-
-if [ "${fields[1]}" != "bash" ]; then
-    echo "Unsupported language."
-    exit 1
-fi
-
-if [ "${fields[2]}" != "f" ] && [ "${fields[2]}" != "d" ]; then
-    echo "Unsupported type."
-    exit 1
-fi
-
-if [ -z "${fields[3]}" ]; then
-    echo "Local repository path not specified."
-    exit 1
-fi
-
-if [ -z "${fields[4]}" ]; then
-    echo "File path not specified."
-    exit 1
-fi
-
-if [ "${fields[2]}" == "f" ]; then
-    # Create or modify file
-    file_path="${fields[3]}/${fields[4]}"
-    if [ -f "$file_path" ]; then
-        echo "$content" | tail -n +2 > "$file_path"
+  elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
+    if [ "$XDG_SESSION_TYPE" == "wayland" ]; then
+      if command -v wl-copy >/dev/null; then
+        echo "wl-copy"
+        return
+      fi
     else
-        echo "$content" | tail -n +2 > "$file_path"
-        git add "$file_path"
+      if command -v xclip >/dev/null; then
+        echo "xclip -selection clipboard"
+        return
+      elif command -v xsel >/dev/null; then
+        echo "xsel -ib"
+        return
+      fi
     fi
-else
-    # Create patch
-    dir_path="${fields[3]}/${fields[4]}"
-    git diff "$dir_path" > "${dir_path}.patch"
-    git add "${dir_path}.patch"
+  elif [ "$(expr substr $(uname -s) 1 10)" == "MINGW32_NT" ]; then
+    if command -v powershell >/dev/null; then
+      echo "powershell.exe Get-Clipboard -Raw | Set-Content -Encoding Utf8"
+      return
+    fi
+  fi
+  echo "No clipboard tool found."
+}
+
+function apply_patch() {
+  local patch_file="$1"
+  git apply --check "$patch_file"
+  if [ $? -ne 0 ]; then
+    echo "Patch file contains errors. Please fix the errors and try again."
+    return 1
+  fi
+  git apply "$patch_file"
+}
+
+# Get the clipboard tool to use
+clipboard_tool="$(get_clipboard_tool)"
+if [[ $clipboard_tool == "No clipboard tool found." ]]; then
+  echo "No suitable clipboard tool found. Please install xclip, xsel, wl-copy, or pbcopy and try again."
+  exit 1
 fi
 
-# Perform operation based on the "operation" field
-if [ "${fields[5]}" == "c" ]; then
-    # Commit local changes
-    git commit -m "${fields[4]} modified"
-elif [ "${fields[5]}" == "p" ]; then
-    # Commit and push changes
-    git commit -m "${fields[4]} modified"
-    git push origin "${fields[6]}"
+# Get the contents of the clipboard
+clipboard_contents="$(eval "$clipboard_tool")"
+
+# Get the commit message from the first line of the clipboard contents
+commit_message="$(echo "$clipboard_contents" | head -n 1)"
+
+# Get the patch from the rest of the clipboard contents
+patch="$(echo "$clipboard_contents" | tail -n +2)"
+
+# Save the patch to a file
+patch_file="$(mktemp)"
+echo "$patch" > "$patch_file"
+
+# Apply the patch and commit the changes
+apply_patch "$patch_file"
+if [ $? -eq 0 ]; then
+  rm "$patch_file"
+  git add .
+  git commit -m "$commit_message"
+  echo "Changes committed successfully."
 else
-    echo "Unsupported operation."
-    exit 1
+  rm "$patch_file"
+  echo "Changes were not committed due to errors applying the patch."
 fi
